@@ -1,5 +1,6 @@
 const std = @import("std");
 const common = @import("common.zig");
+const riscv = @import("riscv.zig");
 
 const bss = @extern([*]u8, .{ .name = "__bss" });
 const bss_end = @extern([*]u8, .{ .name = "__bss_end" });
@@ -19,6 +20,8 @@ pub fn panic(
 export fn kernel_main() noreturn {
     const bss_len = @intFromPtr(bss_end) - @intFromPtr(bss);
     @memset(bss[0..bss_len], 0);
+    riscv.initialize();
+    asm volatile ("unimp");
 
     const name = "Aero";
     common.console.print("Hello {s}!\n", .{name}) catch {};
