@@ -21,14 +21,11 @@ export fn kernel_main() noreturn {
     const bss_len = @intFromPtr(bss_end) - @intFromPtr(bss);
     @memset(bss[0..bss_len], 0);
     riscv.initialize();
-    asm volatile ("unimp");
 
     const name = "Aero";
     common.console.print("Hello {s}!\n", .{name}) catch {};
 
-    @panic("OOPS BLUE SCREEN OF DEATH");
-
-    // while (true) asm volatile ("wfi");
+    while (true) asm volatile ("wfi");
 }
 
 export fn boot() linksection(".text.boot") callconv(.Naked) void {

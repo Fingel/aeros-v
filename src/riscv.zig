@@ -51,7 +51,7 @@ fn write_csr(comptime reg: []const u8, val: usize) void {
     );
 }
 
-export fn kernel_entry() align(4) callconv(.Naked) void {
+fn kernel_entry() align(4) callconv(.Naked) void {
     asm volatile (
         \\ csrw sscratch, sp
         \\ addi sp, sp, -4 * 31
@@ -126,7 +126,7 @@ export fn kernel_entry() align(4) callconv(.Naked) void {
     );
 }
 
-const TrapFrame = extern struct {
+const TrapFrame = struct {
     ra: usize,
     gp: usize,
     tp: usize,
