@@ -43,14 +43,29 @@ fn main() !void {
     const bss_len = @intFromPtr(bss_end) - @intFromPtr(bss);
     @memset(bss[0..bss_len], 0);
     riscv.initialize();
-    // Uncomment to trigger exception
-    // asm volatile ("unimp");
 
-    const two = allocPages(2);
-    const one = allocPages(1);
-    try common.console.print("one: {*} ({}) two: {*} ({})\n", .{ one.ptr, one.len, two.ptr, two.len });
+    // Page allocation
+    {
+        const one = allocPages(1);
+        const two = allocPages(2);
+        try common.console.print("one: {*} ({}) two: {*} ({})\n", .{
+            one.ptr,
+            one.len,
+            two.ptr,
+            two.len,
+        });
+    }
+
+    // Processes
+    {
+        pA = createProcess(processA);
+        pB = createProcess(processB);
+        processA();
+    }
     const name = "Aero";
     try common.console.print("Hello {s}!\n", .{name});
+    // Uncomment to trigger exception
+    // asm volatile ("unimp");
 }
 
 export fn boot() linksection(".text.boot") callconv(.Naked) void {
@@ -59,5 +74,104 @@ export fn boot() linksection(".text.boot") callconv(.Naked) void {
         \\j kernel_main
         :
         : [stack_top] "r" (stack_top),
+    );
+}
+
+var pA: *Process = undefined;
+var pB: *Process = undefined;
+
+export fn processA() void {
+    while (true) {
+        common.console.print("A (a.sp = {*} b.sp = {*})\n", .{
+            pA.sp,
+            pB.sp,
+        }) catch {};
+        switch_context(pA.sp, pB.sp);
+        for (30_000_000) |_| asm volatile ("nop");
+    }
+}
+
+export fn processB() void {
+    while (true) {
+        common.console.print("A\n", .{}) catch {};
+        switch_context(pB.sp, pA.sp);
+        for (30_000_000) |_| asm volatile ("nop");
+    }
+}
+
+const Process = struct {
+    pid: usize = 0,
+    state: enum { unused, runnable } = .unused,
+    sp: *usize = undefined, // stack pointer
+    stack: [8192]u8 = undefined, // kernel stack
+};
+
+const PROCS_MAX = 8;
+
+var procs = [_]Process{.{}} ** PROCS_MAX;
+
+fn createProcess(pc: *const fn() callconv(.C) void) *Process {
+    const p = for (&procs, 0..) |*p, i| {
+        if (p.state == .unused) {
+            p.pid = i;
+            break p;
+        }
+    } else @panic("No free process slots.");
+
+    const regs: []usize = blk: {
+        const ptr: [*]usize = @alignCast(@ptrCast(&p.stack));
+        break :blk ptr[0 .. p.stack.len / @sizeOf(usize)];
+    };
+    const sp = regs[regs.len - 13 ..];
+    sp[0] = @intFromPtr(pc);
+
+    std.debug.assert(sp.len == 13);
+
+    for (sp[1..]) |*reg| {
+        reg.* = 0;
+    }
+
+    p.sp = &sp.ptr[0];
+    p.state = .runnable;
+    return p;
+}
+
+export fn switch_context(cur: *usize, next: *usize) void {
+    // Save callee-saved registers onto the current process's stack.
+    asm volatile (
+        \\ addi sp, sp, -13 * 4
+        \\ sw ra,  0  * 4(sp)
+        \\ sw s0,  1  * 4(sp)
+        \\ sw s1,  2  * 4(sp)
+        \\ sw s2,  3  * 4(sp)
+        \\ sw s3,  4  * 4(sp)
+        \\ sw s4,  5  * 4(sp)
+        \\ sw s5,  6  * 4(sp)
+        \\ sw s6,  7  * 4(sp)
+        \\ sw s7,  8  * 4(sp)
+        \\ sw s8,  9  * 4(sp)
+        \\ sw s9,  10 * 4(sp)
+        \\ sw s10, 11 * 4(sp)
+        \\ sw s11, 12 * 4(sp)
+        \\ sw sp, (%[cur])
+        \\ lw sp, (%[next])
+        \\ lw ra,  0  * 4(sp)
+        \\ lw s0,  1  * 4(sp)
+        \\ lw s1,  2  * 4(sp)
+        \\ lw s2,  3  * 4(sp)
+        \\ lw s3,  4  * 4(sp)
+        \\ lw s4,  5  * 4(sp)
+        \\ lw s5,  6  * 4(sp)
+        \\ lw s6,  7  * 4(sp)
+        \\ lw s7,  8  * 4(sp)
+        \\ lw s8,  9  * 4(sp)
+        \\ lw s9,  10 * 4(sp)
+        \\ lw s10, 11 * 4(sp)
+        \\ lw s11, 12 * 4(sp)
+        \\ addi sp, sp, 13 * 4
+        \\ ret
+        :
+        : [cur] "r" (cur),
+          [next] "r" (next),
     );
 }

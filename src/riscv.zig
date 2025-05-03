@@ -8,7 +8,7 @@ const SbiRet = struct {
     err: usize,
     value: usize,
 };
-
+// Translation of https://operating-system-in-1000-lines.vercel.app/en/05-hello-world#say-hello-to-sbi
 pub fn sbi(
     arg0: usize,
     arg1: usize,
@@ -21,9 +21,13 @@ pub fn sbi(
 ) SbiRet {
     var err: usize = undefined;
     var value: usize = undefined;
+    // the below inline asm formatting is a shortcut that
+    // allows us to avoid writing out a0 r arg0, etc for every argument
     asm volatile ("ecall"
+        // this means after the ecall take the values from a0 and a1 store them in the output variables
         : [err] "={a0}" (err),
           [value] "={a1}" (value),
+          // this means put these input values directly into these registers
         : [arg0] "{a0}" (arg0),
           [arg1] "{a1}" (arg1),
           [arg2] "{a2}" (arg2),
@@ -39,18 +43,19 @@ pub fn sbi(
 }
 
 fn read_csr(comptime reg: []const u8) usize {
-    return asm volatile ("csrr %[ret], " ++ reg
-        : [ret] "=r" (-> usize),
+    return asm volatile ("csrr %[_ret_], " ++ reg // template for the asm
+        : [_ret_] "=r" (-> usize), // return what is in the ret register out of the function
     );
 }
 
 fn write_csr(comptime reg: []const u8, val: usize) void {
-    asm volatile ("csrw " ++ reg ++ ", %[val]"
+    asm volatile ("csrw " ++ reg ++ ", %[_val_]"
         :
-        : [val] "r" (val),
+        : [_val_] "r" (val), // read value into the register templated by %[val]
     );
 }
 
+// Translation of https://operating-system-in-1000-lines.vercel.app/en/08-exception#exception-handler
 fn kernel_entry() align(4) callconv(.Naked) void {
     asm volatile (
         \\ csrw sscratch, sp
