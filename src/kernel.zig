@@ -83,24 +83,32 @@ var pB: *Process = undefined;
 export fn processA() void {
     common.console.print("Starting process A\n", .{}) catch {};
     while (true) {
-        common.console.print("A (a.sp = {*} b.sp = {*})\n", .{
+        common.console.print("A (a.sp = {*} b.sp = {*} counter = {d})\n", .{
             pA.sp,
             pB.sp,
+            pA.counter,
         }) catch {};
+        const active_stack = pA.stack[pA.stack.len - 14 ..];
+        common.console.print("Active stack area: {any}\n", .{active_stack}) catch {};
         switch_context(&pA.sp, &pB.sp);
         for (3_000_000_000) |_| asm volatile ("nop");
+        pA.counter += 1;
     }
 }
 
 export fn processB() void {
     common.console.print("Starting process B\n", .{}) catch {};
     while (true) {
-        common.console.print("B (a.sp = {*} b.sp = {*})\n", .{
+        common.console.print("B (a.sp = {*} b.sp = {*} counter = {d})\n", .{
             pA.sp,
             pB.sp,
+            pB.counter,
         }) catch {};
+        const active_stack = pB.stack[pB.stack.len - 14 ..];
+        common.console.print("Active stack area: {any}\n", .{active_stack}) catch {};
         switch_context(&pB.sp, &pA.sp);
         for (3_000_000_000) |_| asm volatile ("nop");
+        pB.counter += 1;
     }
 }
 
@@ -108,7 +116,8 @@ const Process = struct {
     pid: usize = 0,
     state: enum { unused, runnable } = .unused,
     sp: *usize = undefined, // stack pointer
-    stack: [8192]u8 align(4) = undefined, // kernel stack
+    stack: [8192]u8 = undefined, // kernel stack
+    counter: u32 = 0,
 };
 
 const PROCS_MAX = 8;
