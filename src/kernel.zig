@@ -58,8 +58,8 @@ fn main() !void {
 
     // Processes
     {
-        pA = createProcess(processA);
-        pB = createProcess(processB);
+        pA = createProcess(@intFromPtr(&processA));
+        pB = createProcess(@intFromPtr(&processB));
         processA();
     }
     const name = "Aero";
@@ -81,21 +81,26 @@ var pA: *Process = undefined;
 var pB: *Process = undefined;
 
 export fn processA() void {
+    common.console.print("Starting process A\n", .{}) catch {};
     while (true) {
         common.console.print("A (a.sp = {*} b.sp = {*})\n", .{
             pA.sp,
             pB.sp,
         }) catch {};
-        switch_context(pA.sp, pB.sp);
-        for (30_000_000) |_| asm volatile ("nop");
+        switch_context(&pA.sp, &pB.sp);
+        for (3_000_000_000) |_| asm volatile ("nop");
     }
 }
 
 export fn processB() void {
+    common.console.print("Starting process B\n", .{}) catch {};
     while (true) {
-        common.console.print("A\n", .{}) catch {};
-        switch_context(pB.sp, pA.sp);
-        for (30_000_000) |_| asm volatile ("nop");
+        common.console.print("B (a.sp = {*} b.sp = {*})\n", .{
+            pA.sp,
+            pB.sp,
+        }) catch {};
+        switch_context(&pB.sp, &pA.sp);
+        for (3_000_000_000) |_| asm volatile ("nop");
     }
 }
 
@@ -103,14 +108,15 @@ const Process = struct {
     pid: usize = 0,
     state: enum { unused, runnable } = .unused,
     sp: *usize = undefined, // stack pointer
-    stack: [8192]u8 = undefined, // kernel stack
+    stack: [8192]u8 align(4) = undefined, // kernel stack
 };
 
 const PROCS_MAX = 8;
 
 var procs = [_]Process{.{}} ** PROCS_MAX;
 
-fn createProcess(pc: *const fn() callconv(.C) void) *Process {
+fn createProcess(pc: usize) *Process {
+    // Find an unused process control structure
     const p = for (&procs, 0..) |*p, i| {
         if (p.state == .unused) {
             p.pid = i;
@@ -118,25 +124,47 @@ fn createProcess(pc: *const fn() callconv(.C) void) *Process {
         }
     } else @panic("No free process slots.");
 
-    const regs: []usize = blk: {
-        const ptr: [*]usize = @alignCast(@ptrCast(&p.stack));
-        break :blk ptr[0 .. p.stack.len / @sizeOf(usize)];
-    };
-    const sp = regs[regs.len - 13 ..];
-    sp[0] = @intFromPtr(pc);
+    // Stack callee-saved registers
+    // Find the end of this process's stack, zeros the registers and then
+    // saves the program counter at the top of the stack. The stack layout should look
+    // end up like this:
+    // [... other stack data ...][pc][s0][s1][s2][s3][s4][s5][s6][s7][s8][s9][s10][s11]
+    //                            ^
+    //                    p.stack[len-13]
+    // Which should match how the switch_context function expects the stack to be laid out.
+    var sp: [*]usize = @alignCast(@ptrCast(&p.stack[p.stack.len - 1]));
+    sp[0] = 0; // s11
+    sp -= 1;
+    sp[0] = 0; // s10
+    sp -= 1;
+    sp[0] = 0; // s9
+    sp -= 1;
+    sp[0] = 0; // s8
+    sp -= 1;
+    sp[0] = 0; // s7
+    sp -= 1;
+    sp[0] = 0; // s6
+    sp -= 1;
+    sp[0] = 0; // s5
+    sp -= 1;
+    sp[0] = 0; // s4
+    sp -= 1;
+    sp[0] = 0; // s3
+    sp -= 1;
+    sp[0] = 0; // s2
+    sp -= 1;
+    sp[0] = 0; // s1
+    sp -= 1;
+    sp[0] = 0; // s0
+    sp -= 1;
+    sp[0] = pc; // ra
 
-    std.debug.assert(sp.len == 13);
-
-    for (sp[1..]) |*reg| {
-        reg.* = 0;
-    }
-
-    p.sp = &sp.ptr[0];
     p.state = .runnable;
+    p.sp = &sp[0];
     return p;
 }
 
-export fn switch_context(cur: *usize, next: *usize) void {
+noinline fn switch_context(cur: **usize, next: **usize) callconv(.C) void {
     // Save callee-saved registers onto the current process's stack.
     asm volatile (
         \\ addi sp, sp, -13 * 4
