@@ -43,7 +43,18 @@ fn main() !void {
     const bss_len = @intFromPtr(bss_end) - @intFromPtr(bss);
     @memset(bss[0..bss_len], 0);
     riscv.initialize();
+    const banner =
+        \\                      ▗▄▖  ▗▄▖
+        \\                      █▀█ ▗▛▀▜
+        \\       ▟██▖ ▟█▙  █▟█▌▐▌ ▐▌▐▙
+        \\       ▘▄▟▌▐▙▄▟▌ █▘  ▐▌ ▐▌ ▜█▙
+        \\      ▗█▀▜▌▐▛▀▀▘ █   ▐▌ ▐▌   ▜▌
+        \\      ▐▙▄█▌▝█▄▄▌ █    █▄█ ▐▄▄▟▘
+        \\       ▀▀▝▘ ▝▀▀  ▀    ▝▀▘  ▀▀▘
+        \\
+    ;
 
+    try common.console.print(banner, .{});
     // Page allocation
     {
         const one = allocPages(1);
