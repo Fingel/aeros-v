@@ -69,8 +69,8 @@ fn main() !void {
 
     // Processes
     {
-        pA = createProcess(@intFromPtr(&processA));
-        pB = createProcess(@intFromPtr(&processB));
+        pA = createProcess(&processA);
+        pB = createProcess(&processB);
         processA();
     }
     const name = "Aero";
@@ -91,7 +91,7 @@ export fn boot() linksection(".text.boot") callconv(.Naked) void {
 var pA: *Process = undefined;
 var pB: *Process = undefined;
 
-export fn processA() void {
+fn processA() void {
     common.console.print("Starting process A\n", .{}) catch {};
     while (true) {
         common.console.print("A (a.sp = {*} b.sp = {*} counter = {d})\n", .{
@@ -107,7 +107,7 @@ export fn processA() void {
     }
 }
 
-export fn processB() void {
+fn processB() void {
     common.console.print("Starting process B\n", .{}) catch {};
     while (true) {
         common.console.print("B (a.sp = {*} b.sp = {*} counter = {d})\n", .{
@@ -135,11 +135,11 @@ const PROCS_MAX = 8;
 
 var procs = [_]Process{.{}} ** PROCS_MAX;
 
-fn createProcess(pc: usize) *Process {
+fn createProcess(func: *const fn () void) *Process {
     // Find an unused process control structure
     const p = for (&procs, 0..) |*p, i| {
         if (p.state == .unused) {
-            p.pid = i;
+            p.pid = i + 1;
             break p;
         }
     } else @panic("No free process slots.");
@@ -153,6 +153,7 @@ fn createProcess(pc: usize) *Process {
     //                    p.stack[len-13]
     // Which should match how the switch_context function expects the stack to be laid out.
     var sp: [*]usize = @alignCast(@ptrCast(&p.stack[p.stack.len - 1]));
+    const pc = @intFromPtr(func);
     sp[0] = 0; // s11
     sp -= 1;
     sp[0] = 0; // s10
