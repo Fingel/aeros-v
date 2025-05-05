@@ -79,7 +79,7 @@ fn main() !void {
 
     // Processes
     {
-        idleProc = createProcess(&voidFn);
+        idleProc = createProcess(undefined);
         idleProc.pid = 0;
         currentProc = idleProc;
 
@@ -104,7 +104,6 @@ export fn boot() linksection(".text.boot") callconv(.Naked) void {
         : [stack_top] "r" (stack_top),
     );
 }
-fn voidFn() void {}
 
 fn processA() void {
     common.console.print("Starting process A\n", .{}) catch {};
