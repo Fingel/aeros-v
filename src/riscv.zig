@@ -58,7 +58,7 @@ fn write_csr(comptime reg: []const u8, val: usize) void {
 // Translation of https://operating-system-in-1000-lines.vercel.app/en/08-exception#exception-handler
 fn kernel_entry() align(4) callconv(.Naked) void {
     asm volatile (
-        \\ csrw sscratch, sp
+        \\ csrrw sp, sscratch, sp
         \\ addi sp, sp, -4 * 31
         \\ sw ra,  4 * 0(sp)
         \\ sw gp,  4 * 1(sp)
@@ -90,6 +90,14 @@ fn kernel_entry() align(4) callconv(.Naked) void {
         \\ sw s9,  4 * 27(sp)
         \\ sw s10, 4 * 28(sp)
         \\ sw s11, 4 * 29(sp)
+
+        // Retrieve and save the sp at the time of exception.
+        \\ csrr a0, sscratch
+        \\ sw a0,  4 * 30(sp)
+
+        // Reset the kernel stack.
+        \\ addi a0, sp, 4 * 31
+        \\ csrw sscratch, a0
         \\
         \\ csrr a0, sscratch
         \\ sw a0, 4 * 30(sp)

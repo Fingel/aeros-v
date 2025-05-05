@@ -11,6 +11,16 @@ const ram_end = @extern([*]u8, .{ .name = "__free_ram_end" });
 const page_size = 4096;
 var used_mem: usize = 0;
 
+const PROCS_MAX = 8;
+
+var procs = [_]Process{.{}} ** PROCS_MAX;
+
+var pA: *Process = undefined;
+var pB: *Process = undefined;
+
+var currentProc: *Process = undefined;
+var idleProc: *Process = undefined;
+
 fn allocPages(pages: usize) []u8 {
     const ram = ram_start[0 .. @intFromPtr(ram_end) - @intFromPtr(ram_start)];
     const alloc_size = pages * page_size;
@@ -69,9 +79,16 @@ fn main() !void {
 
     // Processes
     {
+        idleProc = createProcess(&voidFn);
+        idleProc.pid = 0;
+        currentProc = idleProc;
+
         pA = createProcess(&processA);
         pB = createProcess(&processB);
-        processA();
+
+        yield();
+
+        @panic("switched to idle process");
     }
     const name = "Aero";
     try common.console.print("Hello {s}!\n", .{name});
@@ -87,9 +104,7 @@ export fn boot() linksection(".text.boot") callconv(.Naked) void {
         : [stack_top] "r" (stack_top),
     );
 }
-
-var pA: *Process = undefined;
-var pB: *Process = undefined;
+fn voidFn() void {}
 
 fn processA() void {
     common.console.print("Starting process A\n", .{}) catch {};
@@ -101,7 +116,7 @@ fn processA() void {
         }) catch {};
         const active_stack = pA.stack[pA.stack.len - 14 ..];
         common.console.print("Active stack area: {any}\n", .{active_stack}) catch {};
-        switch_context(&pA.sp, &pB.sp);
+        yield();
         for (3_000_000_000) |_| asm volatile ("nop");
         pA.counter += 1;
     }
@@ -117,7 +132,7 @@ fn processB() void {
         }) catch {};
         const active_stack = pB.stack[pB.stack.len - 14 ..];
         common.console.print("Active stack area: {any}\n", .{active_stack}) catch {};
-        switch_context(&pB.sp, &pA.sp);
+        yield();
         for (3_000_000_000) |_| asm volatile ("nop");
         pB.counter += 1;
     }
@@ -131,9 +146,28 @@ const Process = struct {
     counter: u32 = 0,
 };
 
-const PROCS_MAX = 8;
+fn yield() void {
+    const next = for (0..PROCS_MAX) |i| {
+        const process = &procs[(currentProc.pid + i) % PROCS_MAX];
+        if (process.state == .runnable and process.pid > 0) {
+            break process;
+        }
+    } else idleProc;
 
-var procs = [_]Process{.{}} ** PROCS_MAX;
+    if (next == currentProc) return;
+
+    // reset the stack pointer for the exception handler
+    const stackBtm: *usize = @alignCast(@ptrCast(&next.stack[next.stack.len - 1]));
+    asm volatile (
+        \\ csrw sscratch, %[sscratch]
+        :
+        : [sscratch] "r" (stackBtm),
+    );
+
+    const prev = currentProc;
+    currentProc = next;
+    switch_context(&prev.sp, &next.sp);
+}
 
 fn createProcess(func: *const fn () void) *Process {
     // Find an unused process control structure
