@@ -1,15 +1,12 @@
 const std = @import("std");
 const common = @import("common.zig");
 const riscv = @import("riscv.zig");
+const memory = @import("memory.zig");
 
+const kernel_base = @extern([*]u8, .{ .name = "__kernel_base" });
 const bss = @extern([*]u8, .{ .name = "__bss" });
 const bss_end = @extern([*]u8, .{ .name = "__bss_end" });
 const stack_top = @extern([*]u8, .{ .name = "__stack_top" });
-const ram_start = @extern([*]u8, .{ .name = "__free_ram" });
-const ram_end = @extern([*]u8, .{ .name = "__free_ram_end" });
-
-const page_size = 4096;
-var used_mem: usize = 0;
 
 const PROCS_MAX = 8;
 
@@ -20,18 +17,6 @@ var pB: *Process = undefined;
 
 var currentProc: *Process = undefined;
 var idleProc: *Process = undefined;
-
-fn allocPages(pages: usize) []u8 {
-    const ram = ram_start[0 .. @intFromPtr(ram_end) - @intFromPtr(ram_start)];
-    const alloc_size = pages * page_size;
-    if (used_mem + alloc_size > ram.len) {
-        @panic("out of memory");
-    }
-    const result = ram[used_mem .. used_mem + alloc_size];
-    used_mem += alloc_size;
-    @memset(result, 0);
-    return result;
-}
 
 pub fn panic(
     msg: []const u8,
@@ -67,8 +52,8 @@ fn main() !void {
     try common.console.print(banner, .{});
     // Page allocation
     {
-        const one = allocPages(1);
-        const two = allocPages(2);
+        const one = memory.allocPages(1);
+        const two = memory.allocPages(2);
         try common.console.print("one: {*} ({}) two: {*} ({})\n", .{
             one.ptr,
             one.len,
@@ -141,6 +126,7 @@ const Process = struct {
     pid: usize = 0,
     state: enum { unused, runnable } = .unused,
     sp: *usize = undefined, // stack pointer
+    pageTable: [*]usize = undefined,
     stack: [8192]u8 = undefined, // kernel stack
     counter: u32 = 0,
 };
@@ -165,6 +151,22 @@ fn yield() void {
 
     const prev = currentProc;
     currentProc = next;
+
+    const pageTableAddr = @intFromPtr(next.pageTable);
+    const ppn = (pageTableAddr / memory.PAGE_SIZE);
+    const satpValue = memory.SATP_SV32 | ppn;
+    common.console.print("PT addr: 0x{x}, PPN: 0x{x}, SATP: 0x{x}\n", .{ pageTableAddr, ppn, satpValue }) catch {};
+    // Do I need to calculate the stack position like this?
+    // const stackBtmAgain: *usize = @alignCast(@ptrCast(&next.stack[next.stack.len - 1]));
+    asm volatile (
+        \\ sfence.vma
+        \\ csrw satp, %[satp]
+        \\ sfence.vma
+        \\ csrw sscratch, %[sscratch]
+        :
+        : [satp] "r" (satpValue),
+          [sscratch] "r" (&next.stack[next.stack.len - 1]),
+    );
     switch_context(&prev.sp, &next.sp);
 }
 
@@ -176,6 +178,14 @@ fn createProcess(func: *const fn () void) *Process {
             break p;
         }
     } else @panic("No free process slots.");
+
+    // map kernel pages
+    const pageTable: [*]usize = @ptrCast(@alignCast(memory.allocPages(1).ptr));
+    common.console.print("Creating page table{x}\n", .{&pageTable}) catch {};
+    var paddr = @intFromPtr(kernel_base);
+    while (paddr < @intFromPtr(memory.RAM_END)) : (paddr += memory.PAGE_SIZE) {
+        memory.mapPage(pageTable, paddr, paddr, memory.PAGE_R | memory.PAGE_W | memory.PAGE_X);
+    }
 
     // Stack callee-saved registers
     // Find the end of this process's stack, zeros the registers and then
@@ -215,6 +225,7 @@ fn createProcess(func: *const fn () void) *Process {
 
     p.state = .runnable;
     p.sp = &sp[0];
+    p.pageTable = pageTable;
     return p;
 }
 
