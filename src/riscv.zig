@@ -1,7 +1,22 @@
 const std = @import("std");
+const SCAUSE_ECALL = 8;
+pub const SYS_PUTCHAR = 1;
 
 pub fn initialize() void {
     write_csr("stvec", @intFromPtr(&kernel_entry));
+}
+
+pub fn syscall(sysno: u8, arg0: u8, arg1: u8, arg2: u8) u8 {
+    var ret: u8 = undefined;
+    asm volatile ("ecall"
+        : [ret] "={a0}" (ret),
+        : [arg0] "{a0}" (arg0),
+          [arg1] "{a1}" (arg1),
+          [arg2] "{a2}" (arg2),
+          [sysno] "{a3}" (sysno),
+        : "memory"
+    );
+    return ret;
 }
 
 const SbiRet = struct {
@@ -174,9 +189,21 @@ const TrapFrame = struct {
 };
 
 export fn handle_trap(tf: *TrapFrame) void {
-    _ = tf;
     const scause: usize = read_csr("scause");
     const stval: usize = read_csr("stval");
-    const user_pc: usize = read_csr("sepc");
-    std.debug.panic("Unexpected trap scause={x}, stval={x}, sepc={x}", .{ scause, stval, user_pc });
+    var user_pc: usize = read_csr("sepc");
+    if (scause == SCAUSE_ECALL) {
+        handleSyscall(tf);
+        user_pc += 4;
+    } else {
+        std.debug.panic("Unexpected trap scause={x}, stval={x}, sepc={x}", .{ scause, stval, user_pc });
+    }
+    write_csr("sepc", user_pc);
+}
+
+fn handleSyscall(tf: *TrapFrame) void {
+    switch (tf.a3) {
+        SYS_PUTCHAR => _ = sbi(tf.a0, 0, 0, 0, 0, 0, 0, 1), // should be able to call putChar here
+        else => std.debug.panic("Unexpected syscall {}", .{tf.a3}),
+    }
 }
