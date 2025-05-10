@@ -4,18 +4,7 @@ const std = @import("std");
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
-    const target = b.standardTargetOptions(.{});
-
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
-    const optimize = b.standardOptimizeOption(.{});
-
-    const exe = b.addExecutable(.{
+    const kernel = b.addExecutable(.{
         .name = "aeros.elf",
         .root_source_file = b.path("src/kernel.zig"),
         .target = b.resolveTargetQuery(.{
@@ -26,14 +15,65 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSmall,
         .strip = false,
     });
-    exe.entry = .disabled;
+    kernel.entry = .disabled;
 
-    exe.setLinkerScript(b.path("src/kernel.ld"));
+    kernel.setLinkerScript(b.path("src/kernel.ld"));
+
+    const shell = b.addExecutable(.{
+        .name = "shell.elf",
+        .root_source_file = b.path("src/shell.zig"),
+        .target = b.resolveTargetQuery(.{
+            .cpu_arch = .riscv32,
+            .os_tag = .freestanding,
+            .abi = .none,
+        }),
+        .optimize = .ReleaseSmall,
+        .strip = false,
+    });
+
+    shell.entry = .disabled;
+    shell.setLinkerScript(b.path("src/user.ld"));
+    b.installArtifact(shell);
+
+    const bin = b.addObjCopy(shell.getEmittedBin(), .{
+        .basename = "shell.bin",
+        .format = .bin,
+    });
+
+    kernel.root_module.addAnonymousImport("shell.bin", .{
+        .root_source_file = bin.getOutput(),
+    });
+
+    // const elf2bin = b.addSystemCommand(&.{
+    //     "llvm-objcopy",
+
+    //     "--set-section-flags",
+    //     ".bss=alloc,contents",
+    //     "-O",
+    //     "binary",
+    // });
+
+    // elf2bin.addArtifactArg(shell);
+    // const bin = elf2bin.addOutputFileArg("shell.bin");
+
+    // const bin2o = b.addSystemCommand(&.{
+    //     "llvm-objcopy",
+    //     "-Ibinary",
+    //     "-Oelf32-littleriscv",
+    //     // "shell.bin",
+    //     // "shell.bin.o",
+    // });
+
+    // bin2o.addFileArg(bin);
+    // const shell_obj = bin2o.addOutputFileArg("shell.bin.o");
+    // _ = shell_obj;
+
+    // kernel.addObjectFile(shell_obj);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
-    b.installArtifact(exe);
+    b.installArtifact(kernel);
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish
@@ -56,25 +96,11 @@ pub fn build(b: *std.Build) void {
         "-kernel",
     });
 
-    run_cmd.addArtifactArg(exe);
+    run_cmd.addArtifactArg(kernel);
 
     // This creates a build step. It will be visible in the `zig build --help` menu,
     // and can be selected like this: `zig build run`
     // This will evaluate the `run` step rather than the default, which is "install".
     const run_step = b.step("run", "Run Qemu");
     run_step.dependOn(&run_cmd.step);
-
-    const exe_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/kernel.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-
-    // Similar to creating the run step earlier, this exposes a `test` step to
-    // the `zig build --help` menu, providing a way for the user to request
-    // running the unit tests.
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_exe_unit_tests.step);
 }

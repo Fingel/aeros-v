@@ -1,8 +1,11 @@
+const shell = @embedFile("shell.bin");
 const memory = @import("memory.zig");
 const common = @import("common.zig");
 
 const kernel_base = @extern([*]u8, .{ .name = "__kernel_base" });
 const PROCS_MAX = 8;
+const user_base = 0x1000000;
+const SSTATUS_SPIE = 1 << 5;
 
 var procs = [_]Process{.{}} ** PROCS_MAX;
 var currentProc: *Process = undefined;
@@ -18,9 +21,10 @@ pub const Process = struct {
 };
 
 pub fn initialize() void {
-    idleProc = createProcess(undefined);
+    idleProc = createProcess(&.{});
     idleProc.pid = 0;
     currentProc = idleProc;
+    _ = createProcess(shell);
 }
 
 pub fn yield() void {
@@ -62,7 +66,18 @@ pub fn yield() void {
     switch_context(&prev.sp, &next.sp);
 }
 
-pub fn createProcess(func: *const fn () void) *Process {
+export fn user_entry() void {
+    asm volatile (
+        \\ csrw sepc, %[sepc]
+        \\ csrw sstatus, %[sstatus]
+        \\ sret
+        :
+        : [sepc] "r" (user_base),
+          [sstatus] "r" (SSTATUS_SPIE),
+    );
+}
+
+pub fn createProcess(image: []const u8) *Process {
     // Find an unused process control structure
     const p = for (&procs, 0..) |*p, i| {
         if (p.state == .unused) {
@@ -70,14 +85,6 @@ pub fn createProcess(func: *const fn () void) *Process {
             break p;
         }
     } else @panic("No free process slots.");
-
-    // map kernel pages
-    const pageTable: [*]usize = @ptrCast(@alignCast(memory.allocPages(1).ptr));
-    common.console.print("Creating page table{x}\n", .{&pageTable}) catch {};
-    var paddr = @intFromPtr(kernel_base);
-    while (paddr < @intFromPtr(memory.RAM_END)) : (paddr += memory.PAGE_SIZE) {
-        memory.mapPage(pageTable, paddr, paddr, memory.PAGE_R | memory.PAGE_W | memory.PAGE_X);
-    }
 
     // Stack callee-saved registers
     // Find the end of this process's stack, zeros the registers and then
@@ -88,7 +95,7 @@ pub fn createProcess(func: *const fn () void) *Process {
     //                    p.stack[len-13]
     // Which should match how the switch_context function expects the stack to be laid out.
     var sp: [*]usize = @alignCast(@ptrCast(&p.stack[p.stack.len - 1]));
-    const pc = @intFromPtr(func);
+    const pc = @intFromPtr(&user_entry);
     sp[0] = 0; // s11
     sp -= 1;
     sp[0] = 0; // s10
@@ -114,6 +121,24 @@ pub fn createProcess(func: *const fn () void) *Process {
     sp[0] = 0; // s0
     sp -= 1;
     sp[0] = pc; // ra
+
+    // map kernel pages
+    const pageTable: [*]usize = @ptrCast(@alignCast(memory.allocPages(1).ptr));
+    common.console.print("Creating page table{x}\n", .{&pageTable}) catch {};
+    var paddr = @intFromPtr(kernel_base);
+    while (paddr < @intFromPtr(memory.RAM_END)) : (paddr += memory.PAGE_SIZE) {
+        memory.mapPage(pageTable, paddr, paddr, memory.PAGE_R | memory.PAGE_W | memory.PAGE_X);
+    }
+
+    // map user pages
+    var off: usize = 0;
+    while (off < image.len) : (off += memory.PAGE_SIZE) {
+        const page = memory.allocPages(1);
+        const remaining = image.len - off;
+        const copy_size = if (memory.PAGE_SIZE <= remaining) memory.PAGE_SIZE else remaining;
+        @memcpy(page[0..copy_size], image[off..][0..copy_size]);
+        memory.mapPage(pageTable, user_base + off, @intFromPtr(page.ptr), memory.PAGE_U | memory.PAGE_R | memory.PAGE_W | memory.PAGE_X);
+    }
 
     p.state = .runnable;
     p.sp = &sp[0];

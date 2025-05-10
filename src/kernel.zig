@@ -1,3 +1,4 @@
+// const shell = @embedFile("shell.bin");
 const std = @import("std");
 const common = @import("common.zig");
 const riscv = @import("riscv.zig");
@@ -57,8 +58,8 @@ fn main() !void {
     {
         proc.initialize();
 
-        pA = proc.createProcess(&processA);
-        pB = proc.createProcess(&processB);
+        // pA = proc.createProcess(&processA);
+        // pB = proc.createProcess(&processB);
 
         proc.yield();
 
